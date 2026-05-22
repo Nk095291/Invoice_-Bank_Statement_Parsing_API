@@ -1,9 +1,13 @@
 import hashlib
+import os
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import QuerySet
 from django.utils import timezone
 
 from core.logging import get_logger
@@ -17,6 +21,7 @@ from documents.models import (
 from documents.parsers.exceptions import ParseError
 from documents.parsers.router import parse_document
 from documents.parsers.types import ParsedDocument
+from documents.parsers.utils import parse_date
 
 User = get_user_model()
 logger = get_logger('documents.service')
@@ -51,7 +56,6 @@ class DocumentService:
         except (ValueError, TypeError):
             logger.warning('Invalid X-User-Id header', extra={'user_id': user_id_header})
             return None
-        # TODO : make sure the user exists in the database
         return User.objects.filter(pk=user_id).first()
 
     def check_duplicate(self, content_hash: str) -> Document | None:
@@ -59,6 +63,14 @@ class DocumentService:
             content_hash=content_hash,
             is_deleted=False,
         ).first()
+
+    def _enqueue_parse(self, doc_id: str) -> None:
+        if os.getenv('SYNC_PARSE', '').lower() in ('true', '1', 'yes'):
+            self.parse_and_persist(doc_id)
+            return
+        from documents.tasks import parse_document_task
+
+        parse_document_task.delay(doc_id)
 
     @transaction.atomic
     def upload(
@@ -104,8 +116,24 @@ class DocumentService:
             },
         )
 
+        transaction.on_commit(lambda: self._enqueue_parse(str(document.doc_id)))
+
+        return document
+
+    def parse_and_persist(self, doc_id: str) -> Document:
+        document = Document.objects.get(doc_id=doc_id, is_deleted=False)
+
+        if not document.file:
+            document.status = DocumentStatus.FAILED
+            document.error_message = 'No file attached to document'
+            document.save()
+            return document
+
+        with document.file.open('rb') as file_handle:
+            file_bytes = file_handle.read()
+
         try:
-            parsed = parse_document(document_type, file_bytes)
+            parsed = parse_document(document.document_type, file_bytes)
             self._apply_parsed_data(document, parsed)
             document.status = DocumentStatus.COMPLETED
             document.error_message = ''
@@ -170,6 +198,94 @@ class DocumentService:
         except Document.DoesNotExist:
             return None
 
+    def list_documents(
+        self,
+        filters: dict[str, Any] | None = None,
+        user_id_header: str | None = None,
+    ) -> QuerySet:
+        queryset = Document.objects.filter(is_deleted=False).order_by('-created_at')
+
+        user = self.resolve_user(user_id_header)
+        if user:
+            queryset = queryset.filter(user=user)
+
+        if not filters:
+            return queryset
+
+        vendor = filters.get('vendor')
+        if vendor:
+            queryset = queryset.filter(vendor__icontains=vendor)
+
+        date_from = filters.get('date_from')
+        if date_from:
+            queryset = queryset.filter(document_date__gte=date_from)
+
+        date_to = filters.get('date_to')
+        if date_to:
+            queryset = queryset.filter(document_date__lte=date_to)
+
+        amount_min = filters.get('amount_min')
+        if amount_min is not None:
+            queryset = queryset.filter(total_amount__gte=amount_min)
+
+        amount_max = filters.get('amount_max')
+        if amount_max is not None:
+            queryset = queryset.filter(total_amount__lte=amount_max)
+
+        currency = filters.get('currency')
+        if currency:
+            queryset = queryset.filter(currency=currency.upper())
+
+        document_type = filters.get('document_type')
+        if document_type:
+            queryset = queryset.filter(document_type=document_type)
+
+        status = filters.get('status')
+        if status:
+            queryset = queryset.filter(status=status)
+
+        return queryset
+
+    @staticmethod
+    def parse_list_filters(query_params) -> dict[str, Any]:
+        filters: dict[str, Any] = {}
+
+        if query_params.get('vendor'):
+            filters['vendor'] = query_params['vendor'].strip()
+
+        if query_params.get('date_from'):
+            parsed = parse_date(query_params['date_from'])
+            if parsed:
+                filters['date_from'] = parsed
+
+        if query_params.get('date_to'):
+            parsed = parse_date(query_params['date_to'])
+            if parsed:
+                filters['date_to'] = parsed
+
+        if query_params.get('amount_min'):
+            try:
+                filters['amount_min'] = Decimal(query_params['amount_min'])
+            except InvalidOperation:
+                pass
+
+        if query_params.get('amount_max'):
+            try:
+                filters['amount_max'] = Decimal(query_params['amount_max'])
+            except InvalidOperation:
+                pass
+
+        if query_params.get('currency'):
+            filters['currency'] = query_params['currency'].strip()
+
+        if query_params.get('document_type'):
+            filters['document_type'] = query_params['document_type'].strip()
+
+        if query_params.get('status'):
+            filters['status'] = query_params['status'].strip()
+
+        return filters
+
     def update_document(self, doc_id: str, data: dict[str, Any]) -> Document | None:
         document = self.get_document(doc_id)
         if not document:
@@ -190,7 +306,13 @@ class DocumentService:
             return False
 
         if document.file:
-            document.file.delete(save=False)
+            try:
+                document.file.delete(save=False)
+            except OSError as exc:
+                logger.warning(
+                    'Could not delete media file',
+                    extra={'doc_id': str(document.doc_id), 'error': str(exc)},
+                )
 
         document.is_deleted = True
         document.deleted_at = timezone.now()

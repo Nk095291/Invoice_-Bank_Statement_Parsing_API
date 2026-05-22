@@ -18,7 +18,11 @@ class DocumentUploadSerializer(serializers.Serializer):
             )
 
         content_type = getattr(value, 'content_type', '') or ''
-        if content_type and content_type not in settings.ALLOWED_UPLOAD_MIME_TYPES:
+        if (
+            content_type
+            and content_type not in settings.ALLOWED_UPLOAD_MIME_TYPES
+            and extension not in settings.ALLOWED_UPLOAD_EXTENSIONS
+        ):
             raise serializers.ValidationError(f'Unsupported MIME type: {content_type}')
 
         if value.size == 0:
@@ -49,6 +53,31 @@ class BankTransactionSerializer(serializers.ModelSerializer):
             'balance',
             'currency',
         ]
+
+
+class DocumentProcessingSerializer(serializers.Serializer):
+    doc_id = serializers.UUIDField()
+    status = serializers.CharField()
+    detail = serializers.CharField()
+
+
+class DocumentListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Document
+        fields = [
+            'doc_id',
+            'document_type',
+            'status',
+            'original_filename',
+            'vendor',
+            'document_date',
+            'total_amount',
+            'currency',
+            'user_id',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
 
 
 class DocumentDetailSerializer(serializers.ModelSerializer):

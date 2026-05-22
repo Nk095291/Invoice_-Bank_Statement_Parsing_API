@@ -3,6 +3,7 @@ Django settings for myproject project.
 """
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -64,6 +65,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'myproject.wsgi.application'
 
+TESTING = 'test' in sys.argv
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -74,6 +77,12 @@ DATABASES = {
         'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
 }
+
+if TESTING:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': ':memory:',
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -112,6 +121,7 @@ ALLOWED_UPLOAD_MIME_TYPES = {
     'text/csv',
     'application/csv',
     'text/plain',
+    'application/octet-stream',
 }
 
 REST_FRAMEWORK = {
@@ -124,7 +134,27 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.FormParser',
     ],
     'EXCEPTION_HANDLER': 'documents.exceptions.custom_exception_handler',
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
 }
+
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_ALWAYS_EAGER = os.getenv(
+    'CELERY_TASK_ALWAYS_EAGER',
+    'True' if TESTING else 'False',
+).lower() in ('true', '1', 'yes')
+CELERY_TASK_EAGER_PROPAGATES = True
+
+# prefork pool breaks on Windows (billiard PermissionError); solo runs tasks in-process
+CELERY_WORKER_POOL = os.getenv(
+    'CELERY_WORKER_POOL',
+    'solo' if sys.platform == 'win32' else 'prefork',
+)
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 LOG_TO_FILE = os.getenv('LOG_TO_FILE', 'True').lower() in ('true', '1', 'yes')
