@@ -1,0 +1,10 @@
+1. make sure all the test function follow this convention : test_{function_name/class_name}__{condition}__{expected_outcome}
+
+here function_name/class_name is the name of the function and class that we are testing. 
+
+2. make sure to wrap the test function under " # GIVEN, #WHEN, #THEN" blocks. 
+
+inside #GIVEN we will provide the condition , inside #when we will call the function / api. inside #then we will add exception for the results. 
+
+3. make sure to add doc string for every the test function, and add the list of those doc string in the test class, so that it become easiler for the reader to 
+    check what all testcases are covered in the test class. 
