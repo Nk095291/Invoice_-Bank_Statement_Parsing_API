@@ -1,0 +1,11 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.languageServer": "Pylance",
+  "python.analysis.extraPaths": ["${workspaceFolder}/myproject"],
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.diagnosticMode": "workspace",
+  "cursorpyright.analysis.extraPaths": ["${workspaceFolder}/myproject"],
+  "cursorpyright.analysis.autoSearchPaths": true,
+  "cursorpyright.disableLanguageServices": false,
+  "editor.multiCursorModifier": "alt"
+}
